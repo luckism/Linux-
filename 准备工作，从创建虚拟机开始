@@ -1,0 +1,71 @@
+
+1.	设置root密码
+登录到自定义用户终端下，输入：su root
+Password: <--- 输入你当前用户的密码
+Enter new UNIX password: <--- 新的Root用户密码
+Retype new UNIX password: <--- 重复新的Root用户密码
+passwd：已成功更新密码
+(注：这里输入密码时，这个输入是不回显的，Windows平台下，在输入框输入密码就会显示*或圆点，但是Linux里面输入很多都是不回显的，不用担心，继续输入好了。)
+登录到root用户下
+
+2.安装vmware tools
+(这样才能将主机上的C语言文件复制粘贴到虚拟机上)
+1. 在虚拟机中，以 root 身份登录到客户机操作系统并打开终端窗口。 
+2. 确定是否装载CD-ROM 设备。
+方法是：
+①运行/dev/cdrom on /mnt/cdrom type iso9660 (ro,nosuid,nodev)。
+
+正常情况下会出现以下错误：bash: 未预期的符号 '('
+
+这时在把括号这里改为：\(ro,nosuid,nodev\)，然后就可以运行了。
+
+如果接着出现bash：/dev/cdrom：权限不够。
+解决办法：chmod +x 脚本命令，然后  ./脚本命令  即可。
+
+这个问题表示没有安装CD-ROM 设备，然后进入第二步。
+②安装CD-ROM 设备。如果是用root登陆，这里会很方便。运行两个命令即可：
+
+mkdir /mnt/cdrom
+mount /dev/cdrom /mnt/cdrom
+③进入tmp目录解压。运行命令为：cd/tmp，然后解压，中间的过程不用管。
+
+tar zxpf /mnt/cdrom/VMwareTools-x.x.x-yyyy.tar.gz
+
+④解压之后，运行安装程序并配置 VMware Tools。命令为：
+
+cd vmware-tools-distrib
+./vmware-install.pl
+然后一直点进去enter就可以了。记住第一次出现NO时，不能点enter，不然安装就终止了。
+3. 安装程序文件结束运行后，将运行 vmware-config-tools.pl 配置文件。
+命令：
+cd /tmp/vmware-tools-distrib/bin
+./ vmware-config-tools.pl
+然后一直点enter就可以了，
+3.将C语言程序导入虚拟机
+1. 建立一个文件夹notebook_project
+Mkdir notebook_project
+2.	在文件夹下创建文件
+Cd notebook_project
+Touch my_server.c
+Touch my_client.c
+Touch my_recv.c
+Touch my_recv.h
+3.	下载vim编辑器
+Sudo apt install vim
+并利用vim将文件打开
+Vim my_server.c
+I(进入编辑模式)
+4.	复制win10的程序，粘贴到文件中
+Esc(退出编辑模式)
+：wq(保存退出)
+将四个文件一次保存号
+5.	下载C语言编译器
+Sudo apt install gcc
+并将C程序编译
+Gcc my_client.c my_recv.c -o client.out
+Gcc my_server.c my_recv.c -o server.out
+
+6.	打开两个终端
+一个执行：  ./client.out
+另一个执行：./server.out
+                
