@@ -1,0 +1,803 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include<sys/socket.h>
+//#include <sys/socockfd=accket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>                                                                                                           
+#include <unistd.h>
+#include<memory.h>
+#include<time.h>
+#include<sys/wait.h>
+#include<signal.h>
+#include<sys/time.h>
+#include<pthread.h> 
+#include<semaphore.h>
+#define BUFFER_SIZE 256
+#define PORT 6666 
+#define ZHUCE 1
+#define DENGLU 2
+#define BAOCUN 3
+#define TUICHU 4 
+#define THREAD_MAX_CONNECT 10 //最多允许多少个线程并发 
+#define MAXSIZE 1000       //缓存队列可以存储的最大数据
+#define MSG_FILENAME 5
+#define MSG_CONTENT 6
+#define MSG_ACK 7
+#define MSG_DONE 8
+#define MSG_EXCEPTION 9
+#define CHENGGONG 10
+#define SHIBAI    11 
+char recv_buff[10];
+char send_buff[10];
+
+
+typedef struct msg
+{
+	int len;
+	int type;
+	char data[MAXSIZE];
+}msg;
+typedef struct msg_file
+{
+	msg filename; //文件名
+	msg filecontent;//文件内容 
+	
+ }msg_file; 
+typedef struct msg_client
+{
+	char username[10];//用户名
+	char password[10];//密码
+	msg_file file[10];//存储十个文件 
+}msg_client;
+typedef struct msg_server
+{
+       msg_file file[10];//存储十个文件 
+}msg_server;
+
+
+//数据准备
+int buff_se=CHENGGONG;	//初始化为成功 //发送的标识符 
+int buff_re=ZHUCE;//接收的标志符 
+//初始化一个返回对象
+msg_file file1;
+msg_server server1;
+//初始化一个发来的client
+msg_client client1;	
+	
+
+
+	//避免僵死进程    
+	void sig_child(int signo)  
+	  {       
+	  	 pid_t pid;     
+	     int stat;     
+		while((pid = waitpid(-1,&stat,WNOHANG))>0)  
+			    {          
+				printf("chlid %d terminated\n",pid);   
+				 }    
+			return;  
+	  }
+//socket从创建到监听 
+void connect_listen(int sockfd,struct sockaddr_in ser_addr,struct sockaddr_in cli_addr)
+{
+	
+	 //创建socket 
+    if((sockfd=socket(AF_INET,SOCK_STREAM,0))<0)//(范围，类型，数据交换规则（通常赋值为0）)
+												//SOCK_STREAM 提供有序、可靠、双向及基于连接的字节流 
+    {											//AF_INET，代表Internet（TCP/IP）地址族； 
+        perror("socket");//将上一个函数发生错误的原因输出到标准设备（stderr）
+							// 参数所指的字符串先被打印出来 
+						//后面在加上错误原因字符串 依照errno的值来决定要输出的字符串  
+        exit(1);          //异常退出 
+    }
+     else
+    {
+        printf("creat socket success id:%d\n",sockfd);//sock_fd： 时调用socket函数返回的socket描述符  
+    }
+    
+     //初始化socket结构体 
+     bzero(&ser_addr,sizeof(struct sockaddr_in));//bzero()或memset()函数: 将其值置为零。
+     bzero(&cli_addr,sizeof(struct sockaddr_in));
+	 ser_addr.sin_family=AF_INET;
+    ser_addr.sin_port=htons(PORT);//htons(): 把16位值从主机字节序转换成网络字节序  
+    ser_addr.sin_addr.s_addr=htonl(INADDR_ANY);//htonl(): 把32位值从主机字节序转换成网络字节序  
+    
+
+
+	// socket绑定（bind），将套接字和指定端口相连，成功返回0 否则返回-1 
+	if(bind(sockfd,(struct sockaddr *)(&ser_addr),sizeof(struct sockaddr))<0)
+    {
+        perror("bind");
+        exit(2);
+    }
+    else
+    {
+        printf("bind success.\n");
+    }
+    
+    //监听 
+    /*listen函数使socket处于被动的监听模式 
+	并为该socket建立一个输入数据队列，
+	将到达的服务请求保存在此队列中 知道程序处理它们 
+	*/ 
+    if(listen(sockfd,THREAD_MAX_CONNECT)<0)//指定在请求队列中允许的最大请求数为10 
+    {
+        perror("listen");
+        exit(3);
+    }
+    else
+    {
+        printf("listening...\n");
+
+    }
+ } 
+void connect_wait(int sockfd,int newsockfd,struct sockaddr_in cli_addr,socklen_t addr_len)
+{
+	
+		if((newsockfd=accept(sockfd,(struct sockaddr*)(&cli_addr),&addr_len))<0)
+    	{
+       	 perror("accept");
+       	 exit(4);
+   		 }
+    	 else
+    	{
+       	 printf("connect success. \n");
+    	 }
+   		 write(newsockfd,"have connect!",strlen("have connect"));  //服务器刚连接的客户端同个新的文件描述符发送 "have connect!"消息
+}
+ 
+//读取标识符
+int read_require(int newsockfd)
+{
+	int require;
+	int loop;
+        char buff_r[5];
+        int num_temp;
+	 if(read(newsockfd,buff_r,sizeof(buff_r))<0)
+            {
+                perror("read");
+                exit(4);
+            }
+            else if(strlen(buff_r)>0)
+            {
+            	for(loop=0;loop<4;loop++)	
+		{	    
+		num_temp = (int)buff_r[4-loop-1];	   
+ 		num_temp = num_temp << ((4-loop-1)*8);	   
+ 		switch(4-loop-1)	
+   		 {	   
+ 			case 0:		
+			num_temp = num_temp | 0xFFFFFF00;	
+			require = require & num_temp;	
+			break;	 
+   			case 1:	
+			num_temp = num_temp | 0xFFFF00FF;
+			require = require & num_temp;	
+			break;	  
+  			case 2:	
+			num_temp = num_temp | 0xFF00FFFF;
+			require = require& num_temp;	
+			break;	  
+  			case 3:	
+			num_temp = num_temp | 0x00FFFFFF;	
+			require = num_temp;		
+			break;	  
+  		}
+                printf("client本次发来的请求是：");
+                printf("         %d\n",require);
+            }
+            return require; 
+ } 
+ } 
+//从client读取简单字符串 
+ void simple_read(int newsockfd)
+{
+	
+	//首先读取client发来的请求类型 
+			memset(recv_buff,0x00,strlen(recv_buff));
+		 		 if(read(newsockfd,recv_buff,sizeof(recv_buff))<0)
+            {
+                perror("read");
+                exit(4);
+            }
+            else if(strlen(recv_buff)>0)
+            {
+            	
+                printf("client本次发来的信息是：");
+                printf("         %s\n",recv_buff);
+            }
+           
+}
+//对client请求进行简单回复
+void write_reply(int newsockfd,int buff_se)
+{
+	int count;
+        int loop;
+	char buff_s[5];
+	count = (int)(sizeof(int)/sizeof(char));
+       for(loop=0;loop<count;loop++)
+    {
+	buff_s[loop] = (char)(buff_se >> (loop*sizeof(char)*8));
+    }
+	 if(write(newsockfd,buff_s,strlen(buff_s))<0)
+            {
+                perror("write");
+                exit(3);
+            }
+            else
+            {
+                printf("对Client请求的回复为:\n");
+                printf("        %d\n",buff_se);
+            }
+   // memset(send_buff,0x00,strlen(send_buff));
+ } 
+
+ //将文件保存到本地 
+ void read_file(int newsockfd)
+ {
+ 		 int head=0;//队头指针
+		 int rear=0;//队尾指针
+		 int numbytes;
+		 struct msg *buf_ptr[THREAD_MAX_CONNECT];//缓冲区队列
+		 sem_t buffer_area;//已经使用的缓冲区
+		 sem_t empty_buffer_area;//未使用的缓冲区
+		 //close(sockfd);
+		 struct msg *rm;
+		 pthread_t ptid1,ptid2;
+		 struct timeval start;
+		struct timeval end;
+		//消费者，将缓存区的内容写入文件
+		void* consumer1()
+	        {
+	        FILE *fp;
+                int consume_flag = MAXSIZE;
+
+                while(consume_flag != 0)
+
+                {
+			sem_wait(&buffer_area);
+			consume_flag = buf_ptr[head]->len;
+			if(buf_ptr[head]->type == MSG_FILENAME)
+
+                    {
+
+                        if(buf_ptr[head]->len>20)
+
+                        {
+
+                            printf("文件名过长！\n");
+
+                            exit(-1);
+
+                        }
+                        //将文件file1中的文件名清零 
+                          memset(file1.filename.data,0x00,20);
+						//将缓冲区的数据赋给文件file1中的文件名 
+                        memcpy(file1.filename.data,buf_ptr[head]->data,buf_ptr[head]->len);
+						//创建名为（）的文件 
+                        if((fp = fopen(file1.filename.data,"w+")) == NULL)
+
+                        {
+
+                            perror("fopen error");
+
+                            exit(-1);
+
+                        }
+
+                    }
+
+                    else if(buf_ptr[head]->type == MSG_CONTENT)
+
+                    {
+
+                        if(fwrite(buf_ptr[head]->data,1,buf_ptr[head]->len,fp)<0)
+
+                        {
+
+                            printf("fwrite error\n");
+
+                            exit(-1);
+
+                        }
+
+                    }
+
+                    else if(buf_ptr[head]->type == MSG_DONE)
+
+                    {
+
+                        printf("send MSG_DONE!\n");
+
+                        break;
+
+                    }
+
+                    else if(buf_ptr[head]->type == MSG_EXCEPTION)
+
+                    {
+
+                        printf("read the file failed！%d\n",buf_ptr[head]->type);
+
+                        exit(-1);
+
+                    }
+
+                    else
+
+                    {
+
+                        printf("文件类型错误!rm->type=%d\n",buf_ptr[head]->type);
+
+                        exit(-1);
+
+                    }
+
+                    //更新队列状态
+
+                    head = (head+1)%THREAD_MAX_CONNECT;
+
+                    sem_post(&empty_buffer_area);
+
+                }
+
+                fclose(fp);
+
+                pthread_exit(NULL);
+			   }
+//将消息结构体拷贝进缓冲区
+			  void cpy_sm_to_buf(struct msg *sm)
+			  {
+			  	sem_wait(&empty_buffer_area);//等待空闲区 
+			  	memset(buf_ptr[rear],0x00,MAXSIZE);//清空队尾指针 
+			  	memcpy(buf_ptr[rear],sm,sizeof(struct msg));//?
+			  	//更新队列状态
+				  rear=(rear+1) % THREAD_MAX_CONNECT;
+				  //控制线程退出
+				  sem_post(&buffer_area); 
+			   } 
+//生产者，接收数据并放入缓存区
+ void* producer1(void *arg)
+			   {
+			   	  int th_new_fd= *(int *)arg;
+				int  producer_flag = MAXSIZE;
+
+                while( producer_flag != 0)
+
+                {
+
+                    if((numbytes = recv(th_new_fd,(void *)rm,sizeof(struct msg),0)) == -1)
+
+                    {
+
+                        perror("recv error");
+
+                        exit(-1);
+
+                    }
+
+                    if(numbytes == 0)//判断客户端是否断开
+
+                    {
+
+                        printf("客户端已断开！\n");
+
+                        exit(-1);
+
+                    }
+
+                    producer_flag = rm->len;
+                      if((rm->type == MSG_DONE)||(rm->type == MSG_EXCEPTION))
+
+                    {
+
+                        cpy_sm_to_buf(rm);
+
+                        break;
+
+                    }
+			memset(rm->data,0x00,MAXSIZE);
+
+                    if((numbytes = recv(th_new_fd,rm->data,rm->len,0)) == -1)
+					{ perror("recv error");
+						 exit(-1);
+					}
+                    cpy_sm_to_buf(rm);
+
+                }
+                   free(rm);
+                pthread_exit(NULL);
+          		}
+		 rm=(struct msg *)malloc(MAXSIZE+sizeof(struct msg));
+	
+	   	// gettimeofday(&start,NULL);
+    //为存放server数据的缓冲区分配内存
+			   for(int i=0;i<THREAD_MAX_CONNECT;i++)
+				{
+			   	buf_ptr[i]=(struct msg*)malloc(MAXSIZE+sizeof(struct msg));
+			}
+		if(sem_init(&buffer_area,0,0)==-1)
+				{
+					 perror("sem_init error");
+
+                exit(-1);
+				}
+		if(sem_init(&empty_buffer_area,0,THREAD_MAX_CONNECT)==-1)
+				{
+						 perror("sem_init error");
+
+                exit(-1);
+				}
+		 gettimeofday(&start,NULL);
+		 pthread_create(&ptid1,NULL,producer1,&newsockfd);
+	     pthread_create(&ptid2,NULL,consumer1,NULL);
+         pthread_join(ptid1,NULL);
+         pthread_join(ptid2,NULL);
+		 gettimeofday(&end,NULL);
+	     sem_destroy(&buffer_area);
+         sem_destroy(&empty_buffer_area);
+         printf("the time of sending the file is %ld\n",(end.tv_sec - start.tv_sec)*1000000+(end.tv_usec - start.tv_usec));
+         
+         free(rm);
+	//释放缓冲队列
+	     for(int i=0; i<THREAD_MAX_CONNECT; i++)
+	       {
+	           free(buf_ptr[i]);
+	        }
+            exit(0);
+ }
+ 
+ //将文件传给client 
+ void write_file(int newsockfd)
+ {
+ 		 int head=0;//队头指针
+		 int rear=0;//队尾指针
+		 int numbytes;
+		 struct msg *buf_ptr[THREAD_MAX_CONNECT];//缓冲区队列
+		 sem_t buffer_area;//已经使用的缓冲区
+		 sem_t empty_buffer_area;//未使用的缓冲区
+		 //close(sockfd);
+		 struct msg *sm,*rm;
+		 pthread_t ptid1,ptid2;
+		 struct timeval start;
+		struct timeval end;
+//将消息结构体拷贝进缓冲区
+			  void cpy_sm_to_buf(struct msg *sm)
+			  {
+			  	sem_wait(&empty_buffer_area);//等待空闲区 
+			  	memset(buf_ptr[rear],0x00,MAXSIZE);//清空队尾指针 
+			  	memcpy(buf_ptr[rear],sm,sizeof(struct msg));//?
+			  	//更新队列状态
+				  rear=(rear+1) % THREAD_MAX_CONNECT;
+				  //控制线程退出
+				  sem_post(&buffer_area); 
+			   } 
+		//生产者，读文件并放入缓冲区
+void* producer2(void *arg)
+{
+		 char *filepath=(char *)arg;
+
+    FILE *fp;
+
+    int i,j;
+
+    int thread_exit_flag=0;
+
+    int datalen;
+
+    int produce_flag;
+
+    struct msg *rm;
+
+    rm = (struct msg*)malloc(MAXSIZE+sizeof(struct msg));
+
+    //由文件路径获取文件名
+
+    char file_name[256];
+
+    memset(file_name,0x00,256);
+
+    for(i=strlen(filepath)-1; i>=0; i--)
+
+    {
+
+        if(filepath[i] == '/')
+
+        {
+
+            break;
+
+        }
+
+    }
+
+    for(j=i+1; j<strlen(filepath); j++)
+
+    {
+
+        file_name[j-i-1]=filepath[j];
+
+    }
+
+    rm->type = MSG_FILENAME;
+
+    rm->len = strlen(file_name);
+
+    memset(rm->data,0x00,MAXSIZE);
+
+    memcpy(rm->data,file_name,rm->len);//将文件名拷贝到消息中
+
+    cpy_sm_to_buf(rm);
+
+//打开文件
+
+    if((fp=fopen(filepath,"r")) == NULL)
+
+    {
+
+        perror("fopen error");
+
+        exit(-1);
+
+    }
+
+//循环读取文件
+
+    produce_flag = MAXSIZE;
+
+    while(produce_flag == MAXSIZE)
+
+    {
+
+        rm->type = MSG_CONTENT;
+
+        memset(rm->data,0x00,MAXSIZE);
+
+        if((datalen=fread(rm->data,1,MAXSIZE,fp)) == 0)
+
+        {
+
+            if(feof(fp))
+
+            {
+
+                printf("注意，文件为空！\n");
+
+            }
+
+            else
+
+            {
+
+                rm->type = MSG_EXCEPTION;
+
+                rm->len = 0;
+
+                memset(rm->data,0x00,MAXSIZE);
+
+                cpy_sm_to_buf(rm);
+
+                produce_flag = datalen;
+
+                printf("fread error\n");
+
+                exit(-1);
+
+            }
+
+        }
+
+        rm->len = datalen;
+
+        cpy_sm_to_buf(rm);
+
+        produce_flag = datalen;
+
+    }
+
+    rm->type = MSG_DONE;
+
+    rm->len = 0;
+
+    memset(rm->data,0x00,MAXSIZE);
+
+    cpy_sm_to_buf(rm);
+
+    fclose(fp);
+
+    free(rm);
+
+    pthread_exit(NULL);
+
+ } 
+ //消费者，将缓冲区内容发送到服务端
+  void* consumer2(void *arg)
+
+{
+
+    int consufd = *(int *)arg;
+
+    int i;
+
+    int consume_flag = MAXSIZE;
+
+    while(consume_flag != 0)
+
+    {
+
+        sem_wait(&buffer_area);
+
+        //向服务端发送文件名消息
+
+        consume_flag = buf_ptr[head]->len;
+
+        if((send(consufd,buf_ptr[head],sizeof(struct msg)+buf_ptr[head]->len,0)) == -1)
+
+        {
+
+            perror("send error");
+
+            exit(-1);
+
+        }
+
+        //更新队列状态
+
+        head = (head+1)%THREAD_MAX_CONNECT;
+
+        sem_post(&empty_buffer_area);
+
+    }
+
+    pthread_exit(NULL);
+}
+		 rm=(struct msg *)malloc(MAXSIZE+sizeof(struct msg));
+		 sm=(struct msg *)malloc(MAXSIZE+sizeof(struct msg));
+	//初始化确认信息
+         sm->len=0;
+	   	 gettimeofday(&start,NULL);
+    //为存放server数据的缓冲区分配内存
+			   for(int i=0;i<THREAD_MAX_CONNECT;i++)
+				{
+			   	buf_ptr[i]=(struct msg*)malloc(MAXSIZE+sizeof(struct msg));
+			}
+		if(sem_init(&buffer_area,0,0)==-1)
+				{
+					 perror("sem_init error");
+
+                exit(-1);
+				}
+		if(sem_init(&empty_buffer_area,0,THREAD_MAX_CONNECT)==-1)
+				{
+						 perror("sem_init error");
+
+                exit(-1);
+				}
+		 gettimeofday(&start,NULL);
+///////////////////////////此处可写文件路径/////////////////////////////// 
+		 pthread_create(&ptid1,NULL,producer2,file1.filename.data);
+	     pthread_create(&ptid2,NULL,consumer2,&newsockfd);
+         pthread_join(ptid1,NULL);
+         pthread_join(ptid2,NULL);
+		 gettimeofday(&end,NULL);
+	     sem_destroy(&buffer_area);
+         sem_destroy(&empty_buffer_area);
+         printf("the time of sending the file is %ld\n",(end.tv_sec - start.tv_sec)*1000000+(end.tv_usec - start.tv_usec));
+         //close(new_fd);
+         free(sm);
+	//释放缓冲队列
+	     for(int i=0; i<THREAD_MAX_CONNECT; i++)
+	       {
+	           free(buf_ptr[i]);
+	        }
+            exit(0);
+ }
+ 
+int main(void)
+{
+	//file1.filename.data="myfile1";
+	//file1.filecontent.data="myfilecontent1"; 
+
+	server1.file[1].filename=file1.filename;
+	server1.file[1].filecontent=file1.filecontent;
+	int sockfd;	//调用socket函数返回的socket描述符 
+	int newsockfd;//调用socket函数返回的socket描述符 
+	struct sockaddr_in ser_addr,cli_addr; //serv_addr是包含远端主机IP地址和端口号的指针 
+    socklen_t addr_len;
+     addr_len=sizeof(struct sockaddr_in);//addrlen 远端地址结构的长度
+    pid_t pid;//用于多线程 
+    int numbytes;//目前不知道有啥用 
+    
+   
+   //监听socket 
+   connect_listen(sockfd,ser_addr,cli_addr);
+    //一次socket
+	while(1)
+	{
+		 
+         //等待连接 
+        connect_wait(sockfd,newsockfd,cli_addr,addr_len);
+        //创建子进程 
+		 if((pid=fork())==0)
+		 {
+		 	//在本线程内 
+		 	while(1)
+		 	{
+
+		 	//首先读取client发来的请求类型 
+		 		buff_re=read_require(newsockfd);
+            //对于请求类型做出判断
+			if(buff_re==ZHUCE) 
+			{       simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				
+				simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				//对注册的信息进行处理 
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+				
+				//回复client ，内容存在buff_se里了 
+                write_reply(newsockfd,buff_se);
+			}
+			else if(buff_re==DENGLU)
+			{
+				 simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				//对登录信息进行处理 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////				
+				//回复client ，内容存在buff_se里了 
+                write_reply(newsockfd,buff_se);
+					//回复client，写文件 
+			    write_file(newsockfd);
+				
+			}
+				else if(buff_re==BAOCUN)
+			{
+				 simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				//对保存信息处理
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+                //回复client ，内容存在buff_se里了 
+                write_reply(newsockfd,buff_se);
+				
+				//对保存文件处理
+				read_file(newsockfd);
+				
+			
+				 
+			}
+				else if(buff_re==TUICHU)
+			{
+				simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				simple_read(newsockfd);
+				for(int i=0;i<10;i++){client1.username[i]=recv_buff[i];}
+				//对退出信息处理
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				//回复client ，内容存在buff_se里了 
+                		write_reply(newsockfd,buff_se);
+				
+				//对退出文件处理
+				read_file(newsockfd);
+				
+				
+					
+			}
+			else//请求类型无法判断 
+			{
+				//回复client ，内容存在buff_se里了 
+                write_reply(newsockfd,buff_se);
+			}
+			 }
+}
+	close(newsockfd);
+	}
+    close(sockfd);
+    return 0;
+}      
